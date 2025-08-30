@@ -23,7 +23,6 @@ def draw_free(event, x, y, flags, param):
         if len(current_contour) > 2:
             all_contours.append(np.array(current_contour, dtype=np.int32))
 
-# Kopia do rysowania
 temp_img = img_color.copy()
 
 cv.namedWindow("Rysuj kształt (ENTER = zatwierdź)")
@@ -34,7 +33,7 @@ while True:
     key = cv.waitKey(1) & 0xFF
     if key == 13:  # ENTER
         break
-    elif key == 8:  # BACKSPACE usuwa ostatni obrys
+    elif key == 8:  # BACKSPACE do usuwania ostatniego obrys
         if all_contours:
             all_contours.pop()
             temp_img = img_color.copy()
