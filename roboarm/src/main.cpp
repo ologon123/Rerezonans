@@ -38,20 +38,14 @@ struct ServoConfig {
   bool invert;       // invert direction
 };
 
-// Defaults
+// Defaults (values correspond to current PWM 123-590 range)
 ServoConfig servoCfg[NUM_SERVOS] = {
-    {1000, 2000, 0, false}, // ch 0 (MG996R)
-    {1000, 2000, 0, false}, // ch 1 (MG996R)
-    {1000, 2000, 0, false}, // ch 2 (MG996R)
-    {1000, 2000, 0, false}, // ch 3 (MG90S)
-    {1000, 2000, 0, false}, // ch 4 (MG90S)
+    {620, 2520, 0, false}, // ch 0 (MG996R)
+    {620, 2520, 0, false}, // ch 1 (MG996R)
+    {620, 2520, 0, false}, // ch 2 (MG996R)
+    {601, 2881, 0, false}, // ch 3 (MG90S)
+    {601, 2881, 0, false}, // ch 4 (MG90S)
 };
-
-// LED (use transistor/MOSFET). Pick a safe pin.
-static const int LED_PIN = 16;
-static const int LEDC_CH = 0;
-static const int LEDC_FREQ = 1000; // 1 kHz
-static const int LEDC_RES = 8;     // 0..255
 
 // Servo frequency
 static float SERVO_HZ = 50.0f;
@@ -137,16 +131,40 @@ uint16_t angleToUs(uint8_t idx, float deg) {
 
 void writeServoDeg(uint8_t idx, float deg) {
   uint8_t ch = SERVO_CH[idx];
-  uint16_t us = angleToUs(idx, deg);
-  uint16_t tick = usToTick(us, SERVO_HZ);
-  pca.setPWM(ch, 0, tick);
+  
+  // Clamp to -90..+90
+  float d = deg;
+  if (d < -90.0f) d = -90.0f;
+  if (d > +90.0f) d = +90.0f;
+
+  // Map -90..+90 to 0..1
+  float t = (d + 90.0f) / 180.0f; // -90->0, 0->0.5, +90->1
+  
+  // Apply servo config invert if needed
+  const ServoConfig &cfg = servoCfg[idx];
+  if (cfg.invert) t = 1.0f - t;
+  
+  // Convert angle to microseconds using ServoConfig
+  float usf = cfg.min_us + t * (cfg.max_us - cfg.min_us);
+  int32_t us = (int32_t)(usf + 0.5f) + cfg.offset_us;
+  
+  // Safety clamp
+  if (us < 500) us = 500;
+  if (us > 3000) us = 3000;
+  
+  // Convert microseconds to PWM value for PCA9685
+  uint16_t pulse = usToTick((uint16_t)us, SERVO_HZ);
+  
+  pca.setPWM(ch, 0, pulse);
 }
 
 void applyAllOutputs() {
   for (uint8_t i = 0; i < NUM_SERVOS; i++) {
     writeServoDeg(i, currDeg[i]);
   }
-  ledcWrite(LEDC_CH, currLed);
+  // Use PCA9685 channel 15 for LED
+  uint16_t pwm_val = (uint16_t)((currLed * 4095) / 255); // Convert 0-255 to 0-4095
+  pca.setPWM(15, 0, pwm_val);
   
   // Update RGB LED
   rgbLed.setPixelColor(0, rgbLed.Color(currR, currG, currB));
@@ -227,7 +245,9 @@ void updateMotion() {
 void setLed(uint8_t val) {
   targetLed = val;
   currLed = val;
-  ledcWrite(LEDC_CH, val);
+  // Use PCA9685 channel 15 for LED (like in test.cpp)
+  uint16_t pwm_val = (uint16_t)((val * 4095) / 255); // Convert 0-255 to 0-4095
+  pca.setPWM(15, 0, pwm_val);
 }
 
 void setRgbLed(uint8_t r, uint8_t g, uint8_t b) {
@@ -242,8 +262,7 @@ void setRgbLed(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void setPwmFreq(float hz) {
-  SERVO_HZ = hz;
-  pca.setPWMFreq(SERVO_HZ);
+  pca.setPWMFreq(hz);
   delay(10);
 }
 
@@ -578,13 +597,16 @@ void setup() {
   Serial.println("Starting ESP32 RoboArm with WiFi and WebSocket...");
 
   // Initialize I2C and PCA9685
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 400000); // 400 kHz
-  pca.begin();
-  setPwmFreq(SERVO_HZ); // 50 Hz
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Serial.printf("I2C uruchomiony: SDA=%d, SCL=%d\n", I2C_SDA_PIN, I2C_SCL_PIN);
 
-  // Initialize PWM LED
-  ledcSetup(LEDC_CH, LEDC_FREQ, LEDC_RES);
-  ledcAttachPin(LED_PIN, LEDC_CH);
+  // Initialize PCA9685
+  pca.begin();
+  pca.setOscillatorFrequency(27000000);
+  pca.setPWMFreq(SERVO_HZ); // 50 Hz
+  delay(10);
+
+  // Initialize LED on PCA9685 channel 15
   setLed(0);
 
   // Initialize RGB LED
